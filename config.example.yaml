@@ -21,6 +21,11 @@ dynamic:
   http_port: 51122
   socks5_port: 51123
 
+sticky:
+  http_port: 51124
+  socks5_port: 51125
+  rotation_seconds: 60
+
 fixed:
   http_ports:
     - 52133

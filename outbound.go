@@ -23,6 +23,7 @@ func newFixedOutboundSelector(ip string) OutboundSelector {
 }
 
 func dialWithOutbound(ctx context.Context, network, addr string, selector OutboundSelector) (net.Conn, string, string, string, error) {
+	selector = outboundSelectorFromContext(ctx, selector)
 	outboundIP, err := selector()
 	if err != nil {
 		return nil, "", "", "", err

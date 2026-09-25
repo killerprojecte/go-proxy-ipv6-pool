@@ -6,11 +6,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/elazarl/goproxy"
 )
 
-func newHTTPProxy(selector OutboundSelector, auth *ProxyAuth, verbose bool, name string) http.Handler {
+func newHTTPProxy(selector OutboundSelector, auth *ProxyAuth, verbose bool, name string, sticky *StickyManager, rotation time.Duration) http.Handler {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = verbose
 	proxy.NonproxyHandler = http.HandlerFunc(handleNonProxyRequest)
@@ -45,9 +46,13 @@ func newHTTPProxy(selector OutboundSelector, auth *ProxyAuth, verbose bool, name
 			proxy.ServeHTTP(w, req)
 			return
 		}
-		if !auth.AllowHTTPRequest(req) {
+		identity, ok := auth.HTTPIdentity(req)
+		if !ok {
 			writeProxyAuthRequired(w)
 			return
+		}
+		if sticky != nil {
+			req = req.WithContext(withOutboundSelector(req.Context(), sticky.Selector(identity.Key, stickyDuration(identity, rotation))))
 		}
 		proxy.ServeHTTP(w, req)
 	})

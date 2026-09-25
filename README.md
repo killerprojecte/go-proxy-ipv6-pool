@@ -5,6 +5,7 @@ Go Proxy IPv6 Pool 是一个随机 IPv6 出口代理服务，支持 HTTP 代理�
 当前版本支持：
 
 - 动态随机 IPv6 出口端口
+- 粘性 IPv6 轮换 HTTP/SOCKS5 端口
 - 固定端口绑定固定 IPv6 出口
 - HTTP 代理账号密码认证
 - SOCKS5 代理账号密码认证
@@ -20,6 +21,8 @@ Go Proxy IPv6 Pool 是一个随机 IPv6 出口代理服务，支持 HTTP 代理�
 ```
 
 动态端口会在每次出站连接时从 CIDR 中随机生成一个 IPv6，并把它作为本地出口源地址。
+
+粘性端口会按用户名保存 IPv6。在轮换周期内，同一个用户名的连接使用同一个 IPv6，周期结束后首次建立的新连接会生成新的 IPv6。粘性端口默认按配置中的 `rotation_seconds` 轮换，也可以在用户名末尾指定周期，例如 `proxy_user-120` 表示粘性 120 秒。
 
 固定端口会在首次启动时为每个端口随机分配一个 IPv6，并写入状态文件。之后服务重启时，同一个固定端口会继续使用同一个 IPv6。
 
@@ -57,6 +60,11 @@ dynamic:
   http_port: 52122
   socks5_port: 52123
 
+sticky:
+  http_port: 52124
+  socks5_port: 52125
+  rotation_seconds: 60
+
 fixed:
   http_ports:
     - 52133
@@ -77,6 +85,9 @@ fixed:
 - `admin.token`：管理 API Bearer token，启用管理 API 时必须配置。
 - `dynamic.http_port`：动态 HTTP 代理端口。
 - `dynamic.socks5_port`：动态 SOCKS5 代理端口。
+- `sticky.http_port`：粘性 HTTP 代理端口，`0` 表示不启用。
+- `sticky.socks5_port`：粘性 SOCKS5 代理端口，`0` 表示不启用。
+- `sticky.rotation_seconds`：粘性代理默认轮换周期，单位为秒。
 - `fixed.http_ports`：固定 IPv6 的 HTTP 代理端口列表。
 - `fixed.socks5_ports`：固定 IPv6 的 SOCKS5 代理端口列表。
 
@@ -248,6 +259,17 @@ This is a proxy server. Use /ip to view your client IP.
 ```
 
 `/ip` 和 `/whoami` 不要求账号密码，也不要求客户端已经在白名单内。它们只返回 TCP 连接的真实 `RemoteAddr`，不会信任客户端伪造的 `X-Forwarded-For`、`X-Real-IP` 等请求头。
+
+## 使用粘性轮换端口
+
+粘性端口需要配置 `auth.username` 和 `auth.password`。用户名格式为 `<auth.username>-<秒数>`，密码仍使用 `auth.password`：
+
+```bash
+curl -x http://proxy_user-120:proxy_password@服务器IP:52124 http://ipv6.ip.sb/
+curl -x socks5://proxy_user-500:proxy_password@服务器IP:52125 http://ipv6.ip.sb/
+```
+
+同一粘性用户名在指定周期内复用同一个 IPv6，周期结束后自动轮换。直接使用 `proxy_user` 时使用 `sticky.rotation_seconds` 配置的默认周期。
 
 ## 使用固定 IPv6 端口
 

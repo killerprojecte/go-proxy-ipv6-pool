@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 )
 
 const (
@@ -24,6 +25,7 @@ type App struct {
 	state       *State
 	auth        *ProxyAuth
 	fixedStore  *FixedIPStore
+	sticky      *StickyManager
 	runningPort map[int]string
 }
 
@@ -52,16 +54,27 @@ func NewApp(cfg *Config) (*App, error) {
 		state:       state,
 		auth:        auth,
 		fixedStore:  NewFixedIPStore(state),
+		sticky:      NewStickyManager(cfg.CIDR),
 		runningPort: make(map[int]string),
 	}, nil
 }
 
 func (a *App) Start() error {
-	if err := a.startHTTP(a.cfg.Dynamic.HTTPPort, newRandomOutboundSelector(a.cfg.CIDR), "dynamic-http"); err != nil {
+	if err := a.startHTTP(a.cfg.Dynamic.HTTPPort, newRandomOutboundSelector(a.cfg.CIDR), "dynamic-http", nil, 0); err != nil {
 		return err
 	}
-	if err := a.startSocks5(a.cfg.Dynamic.Socks5Port, newRandomOutboundSelector(a.cfg.CIDR), "dynamic-socks5"); err != nil {
+	if err := a.startSocks5(a.cfg.Dynamic.Socks5Port, newRandomOutboundSelector(a.cfg.CIDR), "dynamic-socks5", nil, 0); err != nil {
 		return err
+	}
+	if a.cfg.Sticky.HTTPPort != 0 {
+		if err := a.startHTTP(a.cfg.Sticky.HTTPPort, newRandomOutboundSelector(a.cfg.CIDR), "sticky-http", a.sticky, a.cfg.Sticky.RotationDuration()); err != nil {
+			return err
+		}
+	}
+	if a.cfg.Sticky.Socks5Port != 0 {
+		if err := a.startSocks5(a.cfg.Sticky.Socks5Port, newRandomOutboundSelector(a.cfg.CIDR), "sticky-socks5", a.sticky, a.cfg.Sticky.RotationDuration()); err != nil {
+			return err
+		}
 	}
 
 	for _, port := range a.cfg.Fixed.HTTPPorts {
@@ -101,6 +114,15 @@ func (a *App) logStartup() {
 	}
 	log.Printf("dynamic http: 0.0.0.0:%d", a.cfg.Dynamic.HTTPPort)
 	log.Printf("dynamic socks5: 0.0.0.0:%d", a.cfg.Dynamic.Socks5Port)
+	if a.cfg.Sticky.HTTPPort != 0 || a.cfg.Sticky.Socks5Port != 0 {
+		log.Printf("sticky rotation: %d seconds", a.cfg.Sticky.RotationSeconds)
+	}
+	if a.cfg.Sticky.HTTPPort != 0 {
+		log.Printf("sticky http: 0.0.0.0:%d", a.cfg.Sticky.HTTPPort)
+	}
+	if a.cfg.Sticky.Socks5Port != 0 {
+		log.Printf("sticky socks5: 0.0.0.0:%d", a.cfg.Sticky.Socks5Port)
+	}
 	for _, port := range a.cfg.Fixed.HTTPPorts {
 		ip, _ := a.fixedStore.Get(port)
 		log.Printf("fixed http: 0.0.0.0:%d -> %s", port, ip)
@@ -111,13 +133,13 @@ func (a *App) logStartup() {
 	}
 }
 
-func (a *App) startHTTP(port int, selector OutboundSelector, name string) error {
+func (a *App) startHTTP(port int, selector OutboundSelector, name string, sticky *StickyManager, rotation time.Duration) error {
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		return fmt.Errorf("%s listen on port %d: %w", name, port, err)
 	}
 	server := &http.Server{
-		Handler: newHTTPProxy(selector, a.auth, a.cfg.Verbose, name),
+		Handler: newHTTPProxy(selector, a.auth, a.cfg.Verbose, name, sticky, rotation),
 	}
 
 	a.runningPort[port] = proxyTypeHTTP
@@ -131,12 +153,12 @@ func (a *App) startHTTP(port int, selector OutboundSelector, name string) error 
 	return nil
 }
 
-func (a *App) startSocks5(port int, selector OutboundSelector, name string) error {
+func (a *App) startSocks5(port int, selector OutboundSelector, name string, sticky *StickyManager, rotation time.Duration) error {
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		return fmt.Errorf("%s listen on port %d: %w", name, port, err)
 	}
-	server, err := newSocks5Proxy(selector, a.auth, name)
+	server, err := newSocks5Proxy(selector, a.auth, name, sticky, rotation)
 	if err != nil {
 		_ = listener.Close()
 		return fmt.Errorf("%s init: %w", name, err)
@@ -157,9 +179,9 @@ func (a *App) startFixedPortLocked(port int, proxyType string) error {
 	selector := a.fixedStore.Selector(port)
 	switch proxyType {
 	case proxyTypeHTTP:
-		return a.startHTTP(port, selector, fmt.Sprintf("fixed-http-%d", port))
+		return a.startHTTP(port, selector, fmt.Sprintf("fixed-http-%d", port), nil, 0)
 	case proxyTypeSocks5:
-		return a.startSocks5(port, selector, fmt.Sprintf("fixed-socks5-%d", port))
+		return a.startSocks5(port, selector, fmt.Sprintf("fixed-socks5-%d", port), nil, 0)
 	default:
 		return fmt.Errorf("unsupported fixed proxy type %q", proxyType)
 	}

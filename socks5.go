@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	socks5 "github.com/armon/go-socks5"
 	xcontext "golang.org/x/net/context"
@@ -17,15 +18,15 @@ type Socks5Proxy struct {
 	userPassServer *socks5.Server
 }
 
-func newSocks5Proxy(selector OutboundSelector, auth *ProxyAuth, name string) (*Socks5Proxy, error) {
-	noAuthServer, err := socks5.New(newSocks5Config(selector, auth, true, name))
+func newSocks5Proxy(selector OutboundSelector, auth *ProxyAuth, name string, sticky *StickyManager, rotation time.Duration) (*Socks5Proxy, error) {
+	noAuthServer, err := socks5.New(newSocks5Config(selector, auth, true, name, sticky, rotation))
 	if err != nil {
 		return nil, err
 	}
 
 	var userPassServer *socks5.Server
 	if auth.Enabled() {
-		userPassServer, err = socks5.New(newSocks5Config(selector, auth, false, name))
+		userPassServer, err = socks5.New(newSocks5Config(selector, auth, false, name, sticky, rotation))
 		if err != nil {
 			return nil, err
 		}
@@ -39,10 +40,10 @@ func newSocks5Proxy(selector OutboundSelector, auth *ProxyAuth, name string) (*S
 	}, nil
 }
 
-func newSocks5Config(selector OutboundSelector, auth *ProxyAuth, noAuth bool, name string) *socks5.Config {
+func newSocks5Config(selector OutboundSelector, auth *ProxyAuth, noAuth bool, name string, sticky *StickyManager, rotation time.Duration) *socks5.Config {
 	conf := &socks5.Config{
 		Resolver: ipv6Resolver{name: name},
-		Rewriter: ipv6Rewriter{name: name},
+		Rewriter: ipv6Rewriter{name: name, sticky: sticky, rotation: rotation, auth: auth},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, outboundIP, finalNetwork, finalAddr, err := dialWithOutbound(ctx, network, addr, selector)
 			if err != nil {
@@ -58,13 +59,13 @@ func newSocks5Config(selector OutboundSelector, auth *ProxyAuth, noAuth bool, na
 		conf.AuthMethods = []socks5.Authenticator{&socks5.NoAuthAuthenticator{}}
 		if auth != nil && auth.Enabled() {
 			conf.AuthMethods = append(conf.AuthMethods, &socks5.UserPassAuthenticator{
-				Credentials: socks5.StaticCredentials{auth.username: auth.password},
+				Credentials: auth,
 			})
 		}
 	} else if auth != nil && auth.Enabled() {
 		conf.AuthMethods = []socks5.Authenticator{
 			&socks5.UserPassAuthenticator{
-				Credentials: socks5.StaticCredentials{auth.username: auth.password},
+				Credentials: auth,
 			},
 		}
 	}
@@ -128,10 +129,27 @@ func (r ipv6Resolver) Resolve(ctx xcontext.Context, name string) (xcontext.Conte
 }
 
 type ipv6Rewriter struct {
-	name string
+	name     string
+	sticky   *StickyManager
+	rotation time.Duration
+	auth     *ProxyAuth
 }
 
 func (r ipv6Rewriter) Rewrite(ctx xcontext.Context, request *socks5.Request) (xcontext.Context, *socks5.AddrSpec) {
+	if r.sticky != nil {
+		identity := StickyIdentity{Key: "socks-client"}
+		if request != nil && request.AuthContext != nil {
+			if username := request.AuthContext.Payload["Username"]; username != "" && r.auth != nil {
+				if parsed, ok := r.auth.IdentityForUsername(username); ok {
+					identity = parsed
+				}
+			}
+		}
+		if request != nil && request.RemoteAddr != nil && request.RemoteAddr.IP != nil && identity.Key == "socks-client" {
+			identity.Key = "client:" + request.RemoteAddr.IP.String()
+		}
+		ctx = withOutboundSelector(ctx, r.sticky.Selector(identity.Key, stickyDuration(identity, r.rotation)))
+	}
 	dest := request.DestAddr
 	if dest == nil || dest.FQDN == "" {
 		if dest != nil && dest.IP != nil && dest.IP.To4() != nil {

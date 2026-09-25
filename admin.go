@@ -107,6 +107,11 @@ func (a *App) handleStatus(w http.ResponseWriter, req *http.Request) {
 			"http_port":   a.cfg.Dynamic.HTTPPort,
 			"socks5_port": a.cfg.Dynamic.Socks5Port,
 		},
+		"sticky": map[string]any{
+			"http_port":        a.cfg.Sticky.HTTPPort,
+			"socks5_port":      a.cfg.Sticky.Socks5Port,
+			"rotation_seconds": a.cfg.Sticky.RotationSeconds,
+		},
 		"fixed_count": len(a.cfg.Fixed.AllPorts()),
 		"fixed_ports": a.fixedPortInfosLocked(),
 	})

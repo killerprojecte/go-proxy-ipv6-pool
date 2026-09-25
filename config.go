@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +17,7 @@ type Config struct {
 	Whitelist     []string      `yaml:"whitelist"`
 	Admin         AdminConfig   `yaml:"admin"`
 	Dynamic       DynamicConfig `yaml:"dynamic"`
+	Sticky        StickyConfig  `yaml:"sticky"`
 	Fixed         FixedConfig   `yaml:"fixed"`
 	ConfigSource  string        `yaml:"-"`
 	StateFilePath string        `yaml:"-"`
@@ -29,6 +31,16 @@ type AuthConfig struct {
 type DynamicConfig struct {
 	HTTPPort   int `yaml:"http_port"`
 	Socks5Port int `yaml:"socks5_port"`
+}
+
+type StickyConfig struct {
+	HTTPPort        int   `yaml:"http_port"`
+	Socks5Port      int   `yaml:"socks5_port"`
+	RotationSeconds int64 `yaml:"rotation_seconds"`
+}
+
+func (s StickyConfig) RotationDuration() time.Duration {
+	return time.Duration(s.RotationSeconds) * time.Second
 }
 
 type AdminConfig struct {
@@ -58,6 +70,9 @@ func DefaultConfig() *Config {
 		Dynamic: DynamicConfig{
 			HTTPPort:   52122,
 			Socks5Port: 52123,
+		},
+		Sticky: StickyConfig{
+			RotationSeconds: 60,
 		},
 	}
 }
@@ -132,6 +147,33 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("port %d is duplicated by %s and dynamic.socks5_port", c.Dynamic.Socks5Port, prev)
 	}
 	seen[c.Dynamic.Socks5Port] = "dynamic.socks5_port"
+
+	if c.Sticky.HTTPPort != 0 {
+		if err := validatePort(c.Sticky.HTTPPort, "sticky.http_port"); err != nil {
+			return err
+		}
+		if prev := seen[c.Sticky.HTTPPort]; prev != "" {
+			return fmt.Errorf("port %d is duplicated by %s and sticky.http_port", c.Sticky.HTTPPort, prev)
+		}
+		seen[c.Sticky.HTTPPort] = "sticky.http_port"
+	}
+	if c.Sticky.Socks5Port != 0 {
+		if err := validatePort(c.Sticky.Socks5Port, "sticky.socks5_port"); err != nil {
+			return err
+		}
+		if prev := seen[c.Sticky.Socks5Port]; prev != "" {
+			return fmt.Errorf("port %d is duplicated by %s and sticky.socks5_port", c.Sticky.Socks5Port, prev)
+		}
+		seen[c.Sticky.Socks5Port] = "sticky.socks5_port"
+	}
+	if c.Sticky.HTTPPort != 0 || c.Sticky.Socks5Port != 0 {
+		if c.Sticky.RotationSeconds <= 0 {
+			return fmt.Errorf("sticky.rotation_seconds must be greater than 0")
+		}
+		if c.Sticky.RotationSeconds > int64((time.Duration(1<<63-1))/time.Second) {
+			return fmt.Errorf("sticky.rotation_seconds is too large")
+		}
+	}
 
 	for _, port := range c.Fixed.HTTPPorts {
 		if err := validatePort(port, "fixed.http_ports"); err != nil {

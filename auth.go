@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ProxyAuth struct {
@@ -51,20 +52,68 @@ func (a *ProxyAuth) Valid(username, password string) bool {
 	if !a.enabled {
 		return true
 	}
-	userOK := subtle.ConstantTimeCompare([]byte(username), []byte(a.username)) == 1
+	_, userOK := parseStickyUsername(a.username, username)
 	passOK := subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) == 1
 	return userOK && passOK
 }
 
 func (a *ProxyAuth) AllowHTTPRequest(req *http.Request) bool {
+	_, ok := a.HTTPIdentity(req)
+	return ok
+}
+
+func (a *ProxyAuth) HTTPIdentity(req *http.Request) (StickyIdentity, bool) {
+	identity := StickyIdentity{Key: clientStickyKey(req.RemoteAddr)}
 	if a.ClientWhitelisted(req.RemoteAddr) {
-		return true
+		username, password, ok := parseProxyBasicAuth(req.Header.Get("Proxy-Authorization"))
+		if ok {
+			if parsed, valid := a.identity(username, password); valid {
+				return parsed, true
+			}
+		}
+		return identity, true
 	}
 	if !a.Enabled() {
-		return true
+		return identity, true
 	}
 	username, password, ok := parseProxyBasicAuth(req.Header.Get("Proxy-Authorization"))
-	return ok && a.Valid(username, password)
+	if !ok {
+		return StickyIdentity{}, false
+	}
+	return a.identity(username, password)
+}
+
+func (a *ProxyAuth) IdentityForUsername(username string) (StickyIdentity, bool) {
+	if a == nil {
+		return StickyIdentity{Key: "user:" + username}, true
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.enabled {
+		return StickyIdentity{Key: "user:" + username}, true
+	}
+	return parseStickyUsername(a.username, username)
+}
+
+func (a *ProxyAuth) identity(username, password string) (StickyIdentity, bool) {
+	if a == nil {
+		return StickyIdentity{Key: "user:" + username}, true
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.enabled {
+		return StickyIdentity{Key: "user:" + username}, true
+	}
+	identity, userOK := parseStickyUsername(a.username, username)
+	passOK := subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) == 1
+	return identity, userOK && passOK
+}
+
+func stickyDuration(identity StickyIdentity, fallback time.Duration) time.Duration {
+	if identity.Duration > 0 {
+		return identity.Duration
+	}
+	return fallback
 }
 
 func (a *ProxyAuth) ClientWhitelisted(remoteAddr string) bool {

@@ -243,6 +243,12 @@ func (a *App) validateNewFixedPortLocked(cfg *Config, port int) error {
 	if port == cfg.Dynamic.Socks5Port {
 		return fmt.Errorf("port %d conflicts with dynamic socks5 port", port)
 	}
+	if port == cfg.Sticky.HTTPPort {
+		return fmt.Errorf("port %d conflicts with sticky http port", port)
+	}
+	if port == cfg.Sticky.Socks5Port {
+		return fmt.Errorf("port %d conflicts with sticky socks5 port", port)
+	}
 	if portExists(cfg.Fixed.HTTPPorts, port) || portExists(cfg.Fixed.Socks5Ports, port) {
 		return fmt.Errorf("fixed port %d already exists", port)
 	}

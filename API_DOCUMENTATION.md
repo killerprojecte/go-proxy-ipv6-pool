@@ -76,6 +76,11 @@ curl -H "Authorization: Bearer change-this-admin-token" \
     "http_port": 53001,
     "socks5_port": 53002
   },
+  "sticky": {
+    "http_port": 53005,
+    "socks5_port": 53006,
+    "rotation_seconds": 60
+  },
   "fixed_count": 2,
   "fixed_ports": [
     {
